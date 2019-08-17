@@ -1,0 +1,319 @@
+---  
+title: "Classification problem using logistic regression, random forest and gbm."
+author: "ASLIHAN DEMIRKAYA"
+output:
+  md_document:
+    toc: yes
+    variant: markdown_github
+---
+
+##<span style="color:blue">*Introduction*</span>
+
+In this work, our aim is to do classification analysis using logistic regression, random forest, and gbm models on the dataset `creditcard`. We are going to tune the models to improve the results.  The dataset we will study can be obtained from 
+https://www.kaggle.com/mlg-ulb/creditcardfraud
+
+###<span style="color:blue">*Exploring the Data Set*</span>
+
+First let's read the data `creditcard.csv` and explore the data. 
+
+```{r, echo=TRUE, warning=FALSE, message=FALSE}
+#  Do not change the code in this chunk!
+creditcard_data <- read.csv('creditcard.csv')
+dim(creditcard_data)
+```
+We have 284807  observations and 31 variables. 
+
+```{r}
+library(dplyr)
+glimpse(creditcard_data )
+```
+
+All the variables are numerical but the variable `Class`. Our aim is to predict the  variable `Class`. (takes the value 1 if the transaction is fraud, otherwise 0). The classes are "0" and "1". Here is the table for the counts.
+
+```{r}
+table(creditcard_data$Class) 
+```
+
+As observed, the data is very unbalanced. The size of the data is also big and since our purpose is to understand and apply models, we will work on a smaller size. However, we will keep the full data with `Class=1` to make it less unbalanced. 
+
+```{r}
+creditcard_small_class0<-creditcard_data%>%
+  filter(Class==0)%>%
+  sample_n(size=20000)
+```
+
+
+```{r}
+creditcard_class1<-creditcard_data%>%
+  filter(Class==1)
+```
+
+Now let's sum the `creditcard_small` and the data that has `Class=1`.
+```{r}
+creditcard_small<-rbind(creditcard_small_class0,creditcard_class1)
+```
+
+Now let's check if we have 20000 obervations with `Class=0` and 492 observations with `Class=1`.
+
+```{r}
+table(creditcard_small$Class)
+```
+
+
+## <span style="color:blue">*Preparing the dataset*</span> 
+In order to prevent overfitting, and compare models we split our data set into train-validation and test sets. We also use cross-validation in the models we will present here.
+
+### <span style="color:blue">*Splitting the data into Train-Validation and Test Sets:*</span>
+Since we are going to compare models and select the best model at the end of the section, we will split our data into training and testing (80/20). Then we will
+split the training data into training and validation (again, 80/20). 
+
+Below is the R-code that helps us to split our data set into two sets: Training and Testing data.
+
+
+
+```{r}
+set.seed(123)
+rows <- sample(nrow(creditcard_small)) #randomly order the sampled data
+creditcard_small <- creditcard_small[rows, ]
+split <- round(nrow(creditcard_small) * .80)
+train <- creditcard_small[1:split, ]
+test.set <- creditcard_small[(split + 1):nrow(creditcard_small), ]
+```
+
+Now, we split our Training Data into two sets: Training and Validation data.
+
+```{r}
+set.seed(123)
+rows <- sample(nrow(train)) #randomly order the sampled data
+train <- train[rows, ]
+split <- round(nrow(train) * .80)
+train.set <- train[1:split, ]
+validation.set <- train[(split + 1):nrow(train), ]
+```
+In short, we have three sets now: `train.set` which has 64% of the data, `validation.set` which has 16% of the data and `test.set` which has the 20% of the data. 
+
+```{r}
+print(dim(train.set))  #64% of the data set
+print(dim(validation.set)) # 16% of the data set
+print(dim(test.set))  # 20% of the data set
+```
+
+```{r}
+table(train.set$Class)
+table(validation.set$Class)
+table(test.set$Class)
+```
+
+
+### <span style="color:blue">*Using cross-validation method:*</span>
+We need `caret` package in order to use cross-validation technique. Here is the R-code we use. We pick number of folders as 5. One can take cv number as 10, too. (Since 5 and 10 are the most used ones.) 
+```{r} 
+library(caret)
+myControl <- trainControl(
+  method = "cv",
+  number = 5,
+  summaryFunction = twoClassSummary,
+  classProbs = TRUE, # IMPORTANT!
+  verboseIter = TRUE
+)
+```
+
+Note that we apply cross-validation on the `nhanes`-`test.set`, that is the union of train.set and the validation.set. There is no need for the validation since cross-validation method does it for us.
+
+```{r} 
+creditcard_cv<-rbind(train.set,validation.set)
+dim(creditcard_cv)
+```
+
+
+
+## <span style="color:blue">*Fitting models using Logistic Regression, Random Forest and GBM models*</span>
+
+Our aim is to write models that will predict the variable `Class`. We will do classifications. We will work on logistic regression, random forest, and gbm models respectively.
+
+
+### <span style="color:red">*Fitting models using Logistic Regression *</span>
+
+First, we will start with the basic model: `glm` model for the logistic regression. Following this, we will use `glmnet` since it has hyperparameters we can play.
+
+#### <span style="color:red">*Using `glm` model:*</span>
+
+In this section, we fit `glm` model to our training data `train.set`. First we change our response variable `Class` to a factor variable. This is necessary for the `glm` model.
+
+```{r}
+train.set$Class<-as.factor(train.set$Class)
+```
+
+Our first `glm` model will the basic one, all the variables will be included in the model as follows:
+```{r}
+glm_model_1<-glm(Class ~ ., data = train.set, family = binomial(link = "logit"))
+summary(glm_model_1)
+```
+
+In our first `glm` model, we have AIC as 601.83. We would like to calculate AUC on the `validation.set`  as follows:
+
+```{r} 
+glm.probs.1 <- predict(glm_model_1, newdata=validation.set, type="response")  #probability scale
+glm.pred.1 <- ifelse(glm.probs.1 > 0.5, 1, 0)
+Class_validation <- validation.set$Class
+caret::confusionMatrix(as.factor(glm.pred.1),as.factor(Class_validation))
+caTools::colAUC(glm.probs.1,  validation.set$Class, plotROC = TRUE)
+```
+The AUC for this first model is 0.9857963.
+
+
+#### <span style="color:red">*Using `glm` model and Cross-Validation:*</span>
+Now, intead of dividing our data set into train and validation set, let's work on a glm model using cross-validation. We did define myControl in section: Preparing the Data. We will use my Control as `trControl`.
+
+
+```{r}
+creditcard_cv$Class<-as.factor(creditcard_cv$Class)
+levels(creditcard_cv$Class) <- c("negative", "positive")
+set.seed(1)
+glm_model_cv <- train(Class ~.,creditcard_cv, method = "glm",
+  trControl = myControl)
+glm_model_cv
+```
+
+The AUC for our second model is  0.9760535.
+
+#### <span style="color:red">*Using `glmnet` Model: *</span>
+We fit the `glmnet model` using the R-code below. We also pick hyperparameters as $\alpha \in \{0, 0.25,0.5, 0.75, 1\}$ where $\alpha$ is the elasticnet mixing parameter. Note that $\alpha=1$ is the lasso penalty, and $\alpha=0$ the ridge penalty. We will take $\lambda \in \{0, 1, 2,...,10\}$.  We will use cross-validation again. 
+
+```{r}
+library(glmnet)
+set.seed(1)
+model_glmnet <- train(
+Class ~ ., creditcard_cv,
+metric = "ROC",
+method = "glmnet",
+tuneGrid = expand.grid(
+alpha = 0:4/4,
+lambda = 0:10/10
+),
+trControl = myControl
+)
+ # Plot the results
+model_glmnet
+plot(model_glmnet)
+```
+As seen in the ROC vs Regulalarization Parameter plot above, we see that max ROC occurs at `alpha`=0 and `lambda`=0. With this values, we write `model_glmnet_optimal` as below:
+
+```{r}
+set.seed(1)
+model_glmnet_optimal <- train(
+Class ~ ., creditcard_cv,
+metric = "ROC",
+method = "glmnet",
+tuneGrid = expand.grid(
+alpha = 0,
+lambda = 0
+),
+trControl = myControl
+)
+model_glmnet_optimal
+```
+The AUC for this third model is 0.9806987.
+
+
+
+#### <span style="color:green">*Using Random Forest Model: *</span>
+We are going to use `ranger` as a random forest model. 
+
+```{r}
+set.seed(1)
+model_rf <- train(
+Class ~ ., creditcard_cv,
+metric = "ROC",
+method = "ranger",
+trControl = myControl
+)
+plot(model_rf)
+model_rf
+```
+ The random forest model with the maximum `AUC` = 0.9774700 has sensitivity 0.9996251  and specificity 0.8366764. For this model `mtry`=16 and `splitrule` is `extratrees`.
+
+#### <span style="color:green">*Tuning the Random Forest Model: *</span>
+In the `ranger` method, the default value for the tuneLength is 3. That's why we got three mtry values (`mtry`=2,`mtry`=16 and `mtry`=30) for the model `model_rf`. Below we will pick our `tuneLength` as 6 hoping to improve the results. 
+```{r}
+library(mlbench)
+set.seed(1)
+model_rf_tuned <- train(
+Class ~ ., creditcard_cv,
+metric = "ROC",
+method = "ranger",
+trControl = myControl,
+tuneLength = 6
+)
+plot(model_rf_tuned)
+model_rf_tuned
+```
+
+As seen the the model used 6 values for `mtry`. (mtry $\in \{2,7,13,18,24,30\}$). From the plot and the model, we can tell that the model with the highest AUC= 0.9800891 has sensitivity=0.9997500 and specificity= 0.8239208. For this model mtry=7 and splitrule = extratrees and min.node.size = 1.
+
+
+#### <span style="color:purple">*Using GBM Model: *</span>
+
+In this section, we will use `caret` package again and pick the method as  `gbm`. Since we have classification, we will pick bernoulli loss function.  Here is the R-code for our `gbm` model:
+
+```{r}
+set.seed(1)
+model_gbm <- train(
+Class ~ ., creditcard_cv,
+metric = "ROC",
+method = "gbm",
+distribution="bernoulli",
+trControl = myControl
+)
+plot(model_gbm)
+model_gbm
+```
+ 
+ By looking at the output, at the ROC curve, we can tell that the maximum AUC= 0.9758752   with n.trees = 150, interaction.depth =2, shrinkage = 0.1 and n.minobsinnode = 10.
+
+
+
+### <span style="color:blue">*Comparison of the models:*</span>
+
+We ran 6 models and we get AUC values close to each other. 
+
+```{r}
+models<-c("glm_model_1", "glm_model_cv", "model_glmnet_optimal", "model_rf","model_rf_tuned","model_gbm") 
+auc_all<-c(0.9857963, 0.9760535,0.9806987,0.9774700,0.9800891,0.9758752 )
+df<-data.frame(models,auc_all)
+df
+
+```
+
+
+## <span style="color:blue">*Conclusion*</span> 
+In this section, as a conlusion,  we will fit one of the models, which we picked `gbm` on the full dataset: `creditcard_small` and then test it on the test set.
+
+Here is the R-code for the gbm model on the full dataset:
+
+
+
+Here is the code where we test our model ``model_gbm_full` on the test data:
+
+```{r} 
+gbm.probs <- predict(model_gbm, newdata=test.set, type="prob")  #probability scale
+gbm.pred <- ifelse(gbm.probs$positive > 0.5, 1, 0)
+Class_test <- test.set$Class
+caret::confusionMatrix(as.factor(gbm.pred),as.factor(Class_test))
+caTools::colAUC(gbm.probs,  test.set$Class, plotROC = TRUE)
+```
+
+
+The AUC for our winner model (`gbm`) on the test data is <span style="color:blue">*0.9719185 *</span>.
+
+
+
+For this model, we present the separation of the classes in the figure below.
+
+```{r} 
+gbm.probs <- predict(model_gbm, newdata=test.set, type="prob")
+gbm.pred <-gbm.probs$positive
+ggplot(test.set, aes(x = gbm.pred) )+
+  geom_density(aes(color = as.factor(Class)))
+```
+
